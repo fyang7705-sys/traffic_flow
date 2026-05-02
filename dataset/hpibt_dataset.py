@@ -93,6 +93,9 @@ class HybridPIBTDataset(BasicTSDataset):
             # data: (T,F)
             history_data = self._data[index: index + self.input_len]
             future_data = self._data[index + self.input_len: index + self.input_len + self.output_len]
+            # keep a consistent shape [T, N, C]
+            history_data = history_data[..., np.newaxis]
+            future_data = future_data[..., np.newaxis]
             item["inputs"] = history_data.copy() if self.memmap else history_data
             item["targets"] = future_data.copy() if self.memmap else future_data
             if self.use_timestamps:
@@ -109,9 +112,9 @@ class HybridPIBTDataset(BasicTSDataset):
         series = self._data[sid]
         history_data = series[t0: t0 + self.input_len]
         future_data = series[t0 + self.input_len: t0 + self.input_len + self.output_len]
-        # ✅ STGCN 需要 [T, N, C]
-        history_data = history_data[..., np.newaxis]
-        future_data = future_data[..., np.newaxis]
+        # # ✅ STGCN 需要 [T, N, C]
+        # history_data = history_data[..., np.newaxis]
+        # future_data = future_data[..., np.newaxis]
         item["inputs"] = history_data.copy() if self.memmap else history_data
         item["targets"] = future_data.copy() if self.memmap else future_data
 
@@ -121,7 +124,8 @@ class HybridPIBTDataset(BasicTSDataset):
             future_ts = ts_series[t0 + self.input_len: t0 + self.input_len + self.output_len]
             item["inputs_timestamps"] = history_ts.copy() if self.memmap else history_ts
             item["targets_timestamps"] = future_ts.copy() if self.memmap else future_ts
-
+        # print("input shape:", item["inputs"].shape)
+        # print("target shape:", item["targets"].shape)
         return item
 
     def __len__(self) -> int:

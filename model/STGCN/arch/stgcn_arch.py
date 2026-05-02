@@ -89,11 +89,7 @@ class STGCN(nn.Module):
           but timestamps are unused.
     """
 
-    def __init__(
-        self,
-        config: STGCNConfig,
-        adj: Optional[torch.Tensor] = None,
-    ):
+    def __init__(self, config: STGCNConfig):
         super().__init__()
 
         if config.input_len is None or config.output_len is None:
@@ -108,9 +104,11 @@ class STGCN(nn.Module):
         self.out_channels = int(config.out_channels)
 
         # adjacency buffer (normalized)
-        if adj is None:
-            adj = torch.eye(self.num_nodes)
-        a_hat = _normalize_adj(adj.float(), add_self_loops=config.add_self_loops, kind=config.adj_normalization)
+        if config.adj is None:
+            adj_tensor = torch.eye(self.num_nodes)
+        else:
+            adj_tensor = torch.as_tensor(config.adj, dtype=torch.float32)
+        a_hat = _normalize_adj(adj_tensor.float(), add_self_loops=config.add_self_loops, kind=config.adj_normalization)
         self.register_buffer("a_hat", a_hat)
 
         hidden = int(config.hidden_channels)
@@ -174,4 +172,5 @@ class STGCN(nn.Module):
         y = self.head(x)  # [B, T_out, N, out_channels]
         if self.out_channels == 1:
             y = y.squeeze(-1)  # [B, T_out, N]
+        # print("prediction shape:", y.shape)
         return y

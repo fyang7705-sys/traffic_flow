@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 from basicts.configs import BasicTSModelConfig
 
@@ -29,6 +29,7 @@ class STGCNConfig(BasicTSModelConfig):
     dropout: float = field(default=0.0, metadata={"help": "Dropout probability."})
 
     # adjacency / normalization
+    adj: Optional[List[List[float]]] = field(default=None, metadata={"help": "Adjacency matrix [N, N]."})
     add_self_loops: bool = field(default=True, metadata={"help": "Whether to add self-loops before normalization."})
     adj_normalization: str = field(default="sym", metadata={"help": "Adjacency normalization: 'sym' or 'rw'."})
 
