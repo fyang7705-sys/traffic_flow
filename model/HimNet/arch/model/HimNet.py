@@ -210,6 +210,7 @@ class HimNet(nn.Module):
         st_embedding_dim=16,
         tf_decay_steps=4000,
         use_teacher_forcing=True,
+        use_time_embedding=True,
     ):
         super().__init__()
 
@@ -225,6 +226,7 @@ class HimNet(nn.Module):
         self.st_embedding_dim = st_embedding_dim
         self.tf_decay_steps = tf_decay_steps
         self.use_teacher_forcing = use_teacher_forcing
+        self.use_time_embedding = use_time_embedding
 
         self.encoder_s = HimEncoder(
             num_nodes,
@@ -272,14 +274,19 @@ class HimNet(nn.Module):
         )
 
     def forward(self, x, y_cov, labels=None, batches_seen=None):
-        tod = x[:, -1, 0, 1]
-        dow = x[:, -1, 0, 2]
-        tod_emb = self.tod_embedding(
-            (tod * 288).long()
-        )  # (batch_size, tod_embedding_dim)
-        
-        dow_emb = self.dow_embedding(dow.long())  # (batch_size, dow_embedding_dim)
-        time_embedding = torch.cat([tod_emb, dow_emb], dim=-1)  # (B, tod+dow)
+        if self.use_time_embedding:
+            tod = x[:, -1, 0, 1]
+            dow = x[:, -1, 0, 2]
+            tod_emb = self.tod_embedding((tod * 288).long())  # (B, tod_embedding_dim)
+            dow_emb = self.dow_embedding(dow.long())  # (B, dow_embedding_dim)
+            time_embedding = torch.cat([tod_emb, dow_emb], dim=-1)  # (B, tod+dow)
+        else:
+            time_embedding = torch.zeros(
+                x.shape[0],
+                self.tod_embedding.embedding_dim + self.dow_embedding.embedding_dim,
+                device=x.device,
+                dtype=x.dtype,
+            )
 
         support = torch.softmax(
             torch.relu(self.node_embedding @ self.node_embedding.T), dim=-1

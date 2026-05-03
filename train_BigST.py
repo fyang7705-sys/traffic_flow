@@ -26,7 +26,8 @@ def main():
                 input_len=input_len, 
                 output_len=output_len, 
                 num_nodes=num_nodes, 
-                adj=adj.tolist()
+                adj=adj.tolist(),
+                use_time_embedding=False
             )
             BasicTSLauncher.launch_training(BasicTSForecastingConfig(
                 model=BigST, 

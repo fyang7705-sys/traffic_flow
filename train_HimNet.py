@@ -24,7 +24,8 @@ def main():
             model_config = HimNetConfig(
                 input_len=input_len, 
                 output_len=output_len, 
-                num_nodes=num_nodes
+                num_nodes=num_nodes,
+                use_time_embedding=False
             )
             BasicTSLauncher.launch_training(BasicTSForecastingConfig(
                 model=HimNet, 

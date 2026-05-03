@@ -22,3 +22,4 @@ class HimNetConfig(BasicTSModelConfig):
     tf_decay_steps: int = field(default=4000)
     use_teacher_forcing: bool = field(default=False)
     time_of_day_size: int = field(default=288)
+    use_time_embedding: bool = field(default=True)

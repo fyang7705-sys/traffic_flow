@@ -29,6 +29,7 @@ class BigST(nn.Module):
             use_bn=bool(config.use_bn),
             use_spatial=bool(config.use_spatial),
             use_long=False,
+            use_time_embedding=bool(config.use_time_embedding),
             dropout=float(config.dropout),
             time_of_day_size=self.time_of_day_size,
             day_of_week_size=self.day_of_week_size,

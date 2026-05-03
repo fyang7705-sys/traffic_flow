@@ -26,6 +26,7 @@ class HimNet(nn.Module):
             st_embedding_dim=int(config.st_embedding_dim),
             tf_decay_steps=int(config.tf_decay_steps),
             use_teacher_forcing=bool(config.use_teacher_forcing),
+            use_time_embedding=bool(config.use_time_embedding),
         )
 
     def forward(self, inputs: torch.Tensor, inputs_timestamps: torch.Tensor = None) -> torch.Tensor:

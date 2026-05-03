@@ -20,6 +20,7 @@ class BigSTConfig(BasicTSModelConfig):
     use_bn: bool = field(default=True)
     use_spatial: bool = field(default=True)
     use_long: bool = field(default=False)
+    use_time_embedding: bool = field(default=True)
     time_of_day_size: int = field(default=288)
     day_of_week_size: int = field(default=7)
     adj: Optional[List[List[float]]] = field(default=None)

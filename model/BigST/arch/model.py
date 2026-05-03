@@ -8,7 +8,7 @@ import pdb
 
 class Model(nn.Module):
     def __init__(self, seq_num, in_dim, out_dim, hid_dim, num_nodes, tau, random_feature_dim, node_emb_dim, time_emb_dim, \
-                 use_residual, use_bn, use_spatial, use_long, dropout, time_of_day_size, day_of_week_size, supports=None, edge_indices=None):
+                 use_residual, use_bn, use_spatial, use_long, dropout, time_of_day_size, day_of_week_size, use_time_embedding=True, supports=None, edge_indices=None):
         super(Model, self).__init__()
 
         self.tau = tau
@@ -20,6 +20,7 @@ class Model(nn.Module):
         self.use_bn = use_bn
         self.use_spatial = use_spatial
         self.use_long = use_long
+        self.use_time_embedding = use_time_embedding
         
         self.dropout = dropout
         self.activation = nn.ReLU()
@@ -27,6 +28,7 @@ class Model(nn.Module):
         
         self.time_num = time_of_day_size
         self.week_num = day_of_week_size
+        self.time_emb_dim = time_emb_dim
         
         # node embedding layer
         self.node_emb_layer = nn.Parameter(torch.empty(num_nodes, node_emb_dim))
@@ -65,8 +67,16 @@ class Model(nn.Module):
         # x: (B, N, T, D)
         B, N, T, D = x.size()
         
-        time_emb = self.time_emb_layer[(x[:, :, -1, 1]*self.time_num).type(torch.LongTensor)]
-        week_emb = self.week_emb_layer[(x[:, :, -1, 2]).type(torch.LongTensor)]
+        if self.use_time_embedding:
+            time_index = (x[:, :, -1, 1] * self.time_num).long().to(x.device).clamp(min=0, max=self.time_num - 1)
+            week_index = x[:, :, -1, 2].long().to(x.device) % self.week_num
+            time_emb = self.time_emb_layer[time_index]
+            week_emb = self.week_emb_layer[week_index]
+            time_emb = time_emb.transpose(1, 2).unsqueeze(-1) # (B, dim, N, 1)
+            week_emb = week_emb.transpose(1, 2).unsqueeze(-1) # (B, dim, N, 1)
+        else:
+            time_emb = torch.zeros(B, self.time_emb_dim, N, 1, device=x.device, dtype=x.dtype)
+            week_emb = torch.zeros(B, self.time_emb_dim, N, 1, device=x.device, dtype=x.dtype)
         
         # input embedding
         x = x.contiguous().view(B, N, -1).transpose(1, 2).unsqueeze(-1) # (B, D*T, N, 1)
@@ -75,10 +85,6 @@ class Model(nn.Module):
         # node embeddings
         node_emb = self.node_emb_layer.unsqueeze(0).expand(B, -1, -1).transpose(1, 2).unsqueeze(-1) # (B, dim, N, 1)
 
-        # time embeddings
-        time_emb = time_emb.transpose(1, 2).unsqueeze(-1) # (B, dim, N, 1)
-        week_emb = week_emb.transpose(1, 2).unsqueeze(-1) # (B, dim, N, 1)
-        
         x_g = torch.cat([node_emb, time_emb, week_emb], dim=1) # (B, dim*4, N, 1)
         x = torch.cat([input_emb, node_emb, time_emb, week_emb], dim=1) # (B, dim*4, N, 1)
 
