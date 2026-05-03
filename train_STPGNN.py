@@ -1,4 +1,4 @@
-﻿from torch.optim.lr_scheduler import MultiStepLR
+from torch.optim.lr_scheduler import MultiStepLR
 
 from basicts import BasicTSLauncher
 from basicts.configs import BasicTSForecastingConfig
@@ -7,7 +7,7 @@ from basicts.runners.callback import EarlyStopping, GradientClipping
 
 from dataset.hpibt_dataset import HybridPIBTDataset
 from dataset.graph_scaler import GraphScaler
-from model.STGCN import STGCN, STGCNConfig
+from model.STPGNN import STPGNN, STPGNNConfig
 
 import numpy as np
 
@@ -16,30 +16,36 @@ def main():
     data = np.load("data/den520d_lifelong/robot1000/train_data.npy")
     print(data.shape)
     print(data[:1])
-    adj = np.load("data/den520d_adjacency.npy")
-    num_nodes = 202
-    # adj = np.eye(num_nodes, dtype=np.float32)
+
+    num_nodes = data.shape[-1]
 
     for input_len in [12, 24, 48, 96]:
         for output_len in [12, 24, 48, 96]:
             if output_len > input_len:
                 continue
 
-            model_config = STGCNConfig(
-                num_nodes=num_nodes,
-                in_channels=1,
-                out_channels=1,
+            model_config = STPGNNConfig(
                 input_len=input_len,
                 output_len=output_len,
-                hidden_channels=64,
-                num_layers=2,
-                kernel_size=3,
-                dropout=0.0,
-                adj=adj.tolist(),
+                num_nodes=num_nodes,
+                in_dim=1,
+                dropout=0.1,
+                topk=min(35, num_nodes),
+                residual_channels=32,
+                dilation_channels=32,
+                end_channels=512,
+                kernel_size=2,
+                blocks=4,
+                layers=2,
+                days=48,
+                time_of_day_size=288,
+                dims=32,
+                order=2,
+                normalization="batch",
             )
 
             BasicTSLauncher.launch_training(BasicTSForecastingConfig(
-                model=STGCN,
+                model=STPGNN,
                 model_config=model_config,
                 scaler=GraphScaler,
                 norm_each_channel=True,

@@ -1,4 +1,4 @@
-﻿from torch.optim.lr_scheduler import MultiStepLR
+from torch.optim.lr_scheduler import MultiStepLR
 
 from basicts import BasicTSLauncher
 from basicts.configs import BasicTSForecastingConfig
@@ -7,39 +7,44 @@ from basicts.runners.callback import EarlyStopping, GradientClipping
 
 from dataset.hpibt_dataset import HybridPIBTDataset
 from dataset.graph_scaler import GraphScaler
-from model.STGCN import STGCN, STGCNConfig
+from model.STDN import STDN, STDNConfig
 
 import numpy as np
 
 
 def main():
     data = np.load("data/den520d_lifelong/robot1000/train_data.npy")
+    adj = np.load("data/den520d_adjacency.npy")
     print(data.shape)
     print(data[:1])
-    adj = np.load("data/den520d_adjacency.npy")
-    num_nodes = 202
-    # adj = np.eye(num_nodes, dtype=np.float32)
+
+    num_nodes = data.shape[-1]
 
     for input_len in [12, 24, 48, 96]:
         for output_len in [12, 24, 48, 96]:
             if output_len > input_len:
                 continue
 
-            model_config = STGCNConfig(
-                num_nodes=num_nodes,
-                in_channels=1,
-                out_channels=1,
+            model_config = STDNConfig(
                 input_len=input_len,
                 output_len=output_len,
-                hidden_channels=64,
-                num_layers=2,
-                kernel_size=3,
-                dropout=0.0,
+                num_nodes=num_nodes,
+                time_of_day_size=288,
+                bn_decay=0.1,
+                L=2,
+                K=16,
+                d=8,
+                reference=3,
+                order=3,
+                in_channels=1,
+                out_channels=1,
+                node_miss_rate=0.1,
+                T_miss_len=12,
                 adj=adj.tolist(),
             )
 
             BasicTSLauncher.launch_training(BasicTSForecastingConfig(
-                model=STGCN,
+                model=STDN,
                 model_config=model_config,
                 scaler=GraphScaler,
                 norm_each_channel=True,
