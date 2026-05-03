@@ -1,0 +1,60 @@
+import torch
+from torch import nn
+
+from ..config.himnet_config import HimNetConfig
+from .model.HimNet import HimNet as LegacyHimNet
+
+
+class HimNet(nn.Module):
+    def __init__(self, config: HimNetConfig):
+        super().__init__()
+        if config.input_len is None or config.output_len is None or config.num_nodes is None:
+            raise ValueError("HimNetConfig.input_len/output_len/num_nodes must be set")
+        self.time_of_day_size = int(config.time_of_day_size)
+        self.model = LegacyHimNet(
+            num_nodes=int(config.num_nodes),
+            input_dim=int(config.input_dim),
+            output_dim=int(config.output_dim),
+            out_steps=int(config.output_len),
+            hidden_dim=int(config.hidden_dim),
+            num_layers=int(config.num_layers),
+            cheb_k=int(config.cheb_k),
+            ycov_dim=int(config.ycov_dim),
+            tod_embedding_dim=int(config.tod_embedding_dim),
+            dow_embedding_dim=int(config.dow_embedding_dim),
+            node_embedding_dim=int(config.node_embedding_dim),
+            st_embedding_dim=int(config.st_embedding_dim),
+            tf_decay_steps=int(config.tf_decay_steps),
+            use_teacher_forcing=bool(config.use_teacher_forcing),
+        )
+
+    def forward(self, inputs: torch.Tensor, inputs_timestamps: torch.Tensor = None) -> torch.Tensor:
+        if inputs.dim() == 3:
+            x = inputs.unsqueeze(-1)
+        else:
+            x = inputs
+        b, t, n, _ = x.shape
+        value = x[..., [0]]
+        if inputs_timestamps is not None and inputs_timestamps.dim() == 3:
+            ts = inputs_timestamps
+            if float(ts.detach().max().item()) <= 1.5:
+                tod = ts[:, :, 0:1]
+                dow = ts[:, :, 1:2] if ts.shape[-1] > 1 else torch.zeros_like(tod)
+            else:
+                tod = (ts[:, :, 0:1] % self.time_of_day_size) / float(self.time_of_day_size)
+                dow = (ts[:, :, 1:2] % 7).float() if ts.shape[-1] > 1 else torch.zeros_like(tod)
+        else:
+            base = torch.arange(t, device=x.device).view(1, t, 1, 1).expand(b, -1, n, -1)
+            tod = (base % self.time_of_day_size) / float(self.time_of_day_size)
+            dow = ((base // self.time_of_day_size) % 7).float()
+        x_in = torch.cat([value, tod.to(value.dtype), dow.to(value.dtype)], dim=-1)
+
+        future_abs = (torch.arange(1, self.model.out_steps + 1, device=x.device).view(1, -1, 1, 1) + t - 1).expand(b, -1, n, -1)
+        y_tod = (future_abs % self.time_of_day_size) / float(self.time_of_day_size)
+        y_dow = ((future_abs // self.time_of_day_size) % 7).float()
+        y_cov = torch.cat([y_tod.to(value.dtype), y_dow.to(value.dtype)], dim=-1)
+
+        y = self.model(x_in, y_cov, labels=None, batches_seen=0)
+        if y.dim() == 4 and y.shape[-1] == 1:
+            y = y.squeeze(-1)
+        return y
