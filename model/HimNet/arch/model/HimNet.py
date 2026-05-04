@@ -2,7 +2,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
-
+from .iTrans import ITransformerGlobalTimeEmbedding
 class CrossAttentionGraphFusion(nn.Module):
     """
     利用静态邻接图和 node_embedding 生成的自适应图进行动态融合。
@@ -557,6 +557,7 @@ class HimNet(nn.Module):
         input_dim=3,
         output_dim=1,
         out_steps=12,
+        in_steps=12,
         hidden_dim=64,
         num_layers=1,
         cheb_k=2,
@@ -573,6 +574,13 @@ class HimNet(nn.Module):
         transformer_ff_dim=None,
         transformer_dropout=0.1,
         static_supports=None,
+
+        # iTransformer time embedding
+        time_d_model=64,
+        time_nhead=4,
+        time_layers=1,
+        time_ff_dim=None,
+        time_dropout=0.1,
     ):
         super().__init__()
 
@@ -581,6 +589,7 @@ class HimNet(nn.Module):
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.out_steps = out_steps
+        self.in_steps = in_steps
         self.num_layers = num_layers
         self.cheb_k = cheb_k
         self.ycov_dim = ycov_dim
@@ -589,17 +598,9 @@ class HimNet(nn.Module):
         self.tf_decay_steps = tf_decay_steps
         self.use_teacher_forcing = use_teacher_forcing
         self.use_time_embedding = use_time_embedding
-        if static_supports is not None:
-            if isinstance(static_supports, np.ndarray):
-                static_supports = torch.from_numpy(static_supports).float()
-            elif isinstance(static_supports, torch.Tensor):
-                static_supports = static_supports.float()
-            else:
-                raise TypeError("static_supports must be np.ndarray or torch.Tensor")
+        self.static_supports = static_supports
 
-            self.register_buffer("static_supports", static_supports)
-        else:
-            self.static_supports = None
+        self.time_embedding_dim = tod_embedding_dim + dow_embedding_dim
 
         self.encoder_s = HimEncoder(
             num_nodes=num_nodes,
@@ -622,7 +623,7 @@ class HimNet(nn.Module):
             output_dim=hidden_dim,
             cheb_k=cheb_k,
             num_layers=num_layers,
-            embed_dim=tod_embedding_dim + dow_embedding_dim,
+            embed_dim=self.time_embedding_dim,
             meta_axis="T",
             nhead=transformer_nhead,
             num_transformer_layers=transformer_layers,
@@ -646,19 +647,21 @@ class HimNet(nn.Module):
             max_len=out_steps + 1,
         )
 
-        self.graph_fusion = CrossAttentionGraphFusion(
-            num_nodes=num_nodes,
-            node_embedding_dim=node_embedding_dim,
-            attn_dim=node_embedding_dim,
-            fusion_hidden_dim=16,
-            dropout=transformer_dropout,
-        )
-
-        
         self.out_proj = nn.Linear(hidden_dim, output_dim)
 
-        self.tod_embedding = nn.Embedding(288, tod_embedding_dim)
-        self.dow_embedding = nn.Embedding(7, dow_embedding_dim)
+        self.time_pattern_embedding = ITransformerGlobalTimeEmbedding(
+            in_steps=in_steps,
+            num_nodes=num_nodes,
+            input_dim=input_dim,
+            output_dim=self.time_embedding_dim,
+            node_embedding_dim=node_embedding_dim,
+            d_model=time_d_model,
+            nhead=time_nhead,
+            num_layers=time_layers,
+            dim_feedforward=time_ff_dim,
+            dropout=time_dropout,
+            use_shared_node_embedding=True,
+        )
 
         self.node_embedding = nn.Parameter(
             torch.empty(self.num_nodes, self.node_embedding_dim)
@@ -686,21 +689,11 @@ class HimNet(nn.Module):
         batch_size = x.shape[0]
 
         if self.use_time_embedding:
-            tod = x[:, -1, 0, 1]
-            dow = x[:, -1, 0, 2]
-
-            tod_index = torch.clamp((tod * 288).long(), min=0, max=287)
-            dow_index = torch.clamp(dow.long(), min=0, max=6)
-
-            tod_emb = self.tod_embedding(tod_index)
-            dow_emb = self.dow_embedding(dow_index)
-
-            # B, tod_embedding_dim + dow_embedding_dim
-            time_embedding = torch.cat([tod_emb, dow_emb], dim=-1)
+            time_embedding = self.time_pattern_embedding(x, node_embedding=self.node_embedding)
         else:
             time_embedding = torch.zeros(
                 batch_size,
-                self.tod_embedding.embedding_dim + self.dow_embedding.embedding_dim,
+                self.time_embedding_dim,
                 device=x.device,
                 dtype=x.dtype,
             )
@@ -710,16 +703,8 @@ class HimNet(nn.Module):
             dim=-1,
         )
 
-        if self.static_supports is not None:
-            support_s = self.graph_fusion(
-                node_embedding=self.node_embedding,
-                adaptive_support=adaptive_support,
-                static_support=self.static_supports,
-            )
-        else:
-            support_s = adaptive_support
+        support_s = adaptive_support
 
-        # Encoder outputs: B, T_in, N, hidden_dim
         h_s, _ = self.encoder_s(
             x,
             support_s,
@@ -732,13 +717,10 @@ class HimNet(nn.Module):
             time_embedding,
         )
 
-        # B, N, hidden_dim
         h_last = (h_s + h_t)[:, -1, :, :]
 
-        # B, N, st_embedding_dim
         st_embedding = self.st_proj(h_last)
 
-        # Dynamic support for decoder: B, N, N
         support_st = torch.softmax(
             torch.relu(
                 torch.einsum(
@@ -750,7 +732,6 @@ class HimNet(nn.Module):
             dim=-1,
         )
 
-        # Initial decoder states. Each layer starts from encoder last state.
         ht_list = [h_last for _ in range(self.num_layers)]
 
         go = torch.zeros(
@@ -765,7 +746,6 @@ class HimNet(nn.Module):
         decoder_inputs = []
 
         for t in range(self.out_steps):
-            # B, N, output_dim + ycov_dim
             decoder_input_t = torch.cat(
                 [go, y_cov[:, t, ...]],
                 dim=-1,
@@ -773,13 +753,11 @@ class HimNet(nn.Module):
 
             decoder_inputs.append(decoder_input_t)
 
-            # B, T_dec, N, output_dim + ycov_dim
             decoder_input_seq = torch.stack(
                 decoder_inputs,
                 dim=1,
             )
 
-            # h_de: B, N, hidden_dim
             h_de, ht_list = self.decoder(
                 decoder_input_seq,
                 ht_list,
@@ -787,7 +765,6 @@ class HimNet(nn.Module):
                 st_embedding,
             )
 
-            # B, N, output_dim
             go = self.out_proj(h_de)
             out.append(go)
 
@@ -801,7 +778,6 @@ class HimNet(nn.Module):
                 if c < self.compute_sampling_threshold(batches_seen):
                     go = labels[:, t, ...]
 
-        # B, out_steps, N, output_dim
         output = torch.stack(out, dim=1)
 
         return output

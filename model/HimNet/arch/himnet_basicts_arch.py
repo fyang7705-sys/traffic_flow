@@ -17,11 +17,19 @@ class HimNet(nn.Module):
         if getattr(config, "adj", None) is not None:
             static_supports = torch.as_tensor(config.adj, dtype=torch.float32)
 
+        if getattr(config, "in_steps", None) is None:
+            in_steps = int(config.input_len)
+        else:
+            cfg_in_steps = config.in_steps
+            assert cfg_in_steps is not None
+            in_steps = int(cfg_in_steps)
+
         self.model = LegacyHimNet(
             num_nodes=int(config.num_nodes),
             input_dim=int(config.input_dim),
             output_dim=int(config.output_dim),
             out_steps=int(config.output_len),
+            in_steps=in_steps,
             hidden_dim=int(config.hidden_dim),
             num_layers=int(config.num_layers),
             cheb_k=int(config.cheb_k),
@@ -33,7 +41,16 @@ class HimNet(nn.Module):
             tf_decay_steps=int(config.tf_decay_steps),
             use_teacher_forcing=bool(config.use_teacher_forcing),
             use_time_embedding=bool(config.use_time_embedding),
+            transformer_nhead=int(config.transformer_nhead),
+            transformer_layers=int(config.transformer_layers),
+            transformer_ff_dim=(None if config.transformer_ff_dim is None else int(config.transformer_ff_dim)),
+            transformer_dropout=float(config.transformer_dropout),
             static_supports=static_supports,
+            time_d_model=int(config.time_d_model),
+            time_nhead=int(config.time_nhead),
+            time_layers=int(config.time_layers),
+            time_ff_dim=(None if config.time_ff_dim is None else int(config.time_ff_dim)),
+            time_dropout=float(config.time_dropout),
         )
 
     def forward(self, inputs: torch.Tensor, inputs_timestamps: Optional[torch.Tensor] = None) -> torch.Tensor:
