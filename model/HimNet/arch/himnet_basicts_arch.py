@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from typing import Optional
 
 from ..config.himnet_config import HimNetConfig
 from .model.HimNet import HimNet as LegacyHimNet
@@ -11,6 +12,11 @@ class HimNet(nn.Module):
         if config.input_len is None or config.output_len is None or config.num_nodes is None:
             raise ValueError("HimNetConfig.input_len/output_len/num_nodes must be set")
         self.time_of_day_size = int(config.time_of_day_size)
+
+        static_supports = None
+        if getattr(config, "adj", None) is not None:
+            static_supports = torch.as_tensor(config.adj, dtype=torch.float32)
+
         self.model = LegacyHimNet(
             num_nodes=int(config.num_nodes),
             input_dim=int(config.input_dim),
@@ -27,9 +33,10 @@ class HimNet(nn.Module):
             tf_decay_steps=int(config.tf_decay_steps),
             use_teacher_forcing=bool(config.use_teacher_forcing),
             use_time_embedding=bool(config.use_time_embedding),
+            static_supports=static_supports,
         )
 
-    def forward(self, inputs: torch.Tensor, inputs_timestamps: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, inputs: torch.Tensor, inputs_timestamps: Optional[torch.Tensor] = None) -> torch.Tensor:
         if inputs.dim() == 3:
             x = inputs.unsqueeze(-1)
         else:

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 from basicts.configs import BasicTSModelConfig
 
@@ -23,3 +23,4 @@ class HimNetConfig(BasicTSModelConfig):
     use_teacher_forcing: bool = field(default=False)
     time_of_day_size: int = field(default=288)
     use_time_embedding: bool = field(default=True)
+    adj: Optional[List[List[float]]] = field(default=None)

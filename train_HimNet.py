@@ -16,6 +16,7 @@ from model.HimNet import HimNet, HimNetConfig
 
 def main():
     data = np.load("data/den520d_lifelong/robot1000/train_data.npy")
+    adj = np.load("data/den520d_adjacency.npy")
     num_nodes = data.shape[-1]
     for input_len in [12, 24, 48, 96]:
         for output_len in [12, 24, 48, 96]:
@@ -25,7 +26,8 @@ def main():
                 input_len=input_len, 
                 output_len=output_len, 
                 num_nodes=num_nodes,
-                use_time_embedding=False
+                use_time_embedding=True,
+                adj=adj.tolist(),
             )
             BasicTSLauncher.launch_training(BasicTSForecastingConfig(
                 model=HimNet, 

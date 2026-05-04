@@ -3,6 +3,116 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+class CrossAttentionGraphFusion(nn.Module):
+    """
+    利用静态邻接图和 node_embedding 生成的自适应图进行动态融合。
+
+    输入：
+        node_embedding:   N, E
+        adaptive_support: N, N
+        static_support:   N, N
+
+    输出：
+        fused_support:    N, N
+    """
+
+    def __init__(
+        self,
+        num_nodes,
+        node_embedding_dim,
+        attn_dim=None,
+        fusion_hidden_dim=16,
+        dropout=0.1,
+    ):
+        super().__init__()
+
+        self.num_nodes = num_nodes
+
+        if attn_dim is None:
+            attn_dim = node_embedding_dim
+
+        self.q_proj = nn.Linear(node_embedding_dim, attn_dim)
+        self.k_proj = nn.Linear(node_embedding_dim, attn_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        # 对 adaptive / static / cross 三种图做边级别动态融合
+        self.edge_fusion = nn.Sequential(
+            nn.Linear(3, fusion_hidden_dim),
+            nn.ReLU(),
+            nn.Linear(fusion_hidden_dim, 3),
+        )
+
+    def _row_normalize(self, adj, eps=1e-8):
+        adj = torch.relu(adj)
+        return adj / (adj.sum(dim=-1, keepdim=True) + eps)
+
+    def forward(self, node_embedding, adaptive_support, static_support):
+        """
+        node_embedding:
+            N, E
+
+        adaptive_support:
+            N, N
+
+        static_support:
+            N, N
+        """
+
+        static_support = static_support.to(
+            device=adaptive_support.device,
+            dtype=adaptive_support.dtype,
+        )
+
+        # 静态图先做行归一化，避免尺度和 adaptive_support 不一致
+        static_support = self._row_normalize(static_support)
+
+        # -------------------------------------------------------
+        # 1. 用静态图聚合 node_embedding，得到静态结构感知的节点表示
+        # -------------------------------------------------------
+        # N, E
+        static_context = torch.matmul(static_support, node_embedding)
+
+        # -------------------------------------------------------
+        # 2. 交叉注意力：
+        #    query 来自 node_embedding
+        #    key 来自 static_context
+        # -------------------------------------------------------
+        Q = self.q_proj(node_embedding)        # N, D
+        K = self.k_proj(static_context)        # N, D
+
+        attn_logits = torch.matmul(Q, K.T) / math.sqrt(Q.shape[-1])
+
+        # N, N
+        cross_support = torch.softmax(attn_logits, dim=-1)
+        cross_support = self.dropout(cross_support)
+
+        # -------------------------------------------------------
+        # 3. 边级别动态融合 adaptive / static / cross
+        # -------------------------------------------------------
+        candidates = torch.stack(
+            [
+                adaptive_support,
+                static_support,
+                cross_support,
+            ],
+            dim=-1,
+        )
+        # N, N, 3
+
+        fusion_logits = self.edge_fusion(candidates)
+        fusion_weight = torch.softmax(fusion_logits, dim=-1)
+        # N, N, 3
+
+        fused_support = (
+            fusion_weight[..., 0] * adaptive_support
+            + fusion_weight[..., 1] * static_support
+            + fusion_weight[..., 2] * cross_support
+        )
+
+        fused_support = self._row_normalize(fused_support)
+
+        return fused_support
+
 
 class HimGCN(nn.Module):
     def __init__(self, input_dim, output_dim, cheb_k, embed_dim, meta_axis=None):
@@ -462,6 +572,7 @@ class HimNet(nn.Module):
         transformer_layers=1,
         transformer_ff_dim=None,
         transformer_dropout=0.1,
+        static_supports=None,
     ):
         super().__init__()
 
@@ -478,6 +589,17 @@ class HimNet(nn.Module):
         self.tf_decay_steps = tf_decay_steps
         self.use_teacher_forcing = use_teacher_forcing
         self.use_time_embedding = use_time_embedding
+        if static_supports is not None:
+            if isinstance(static_supports, np.ndarray):
+                static_supports = torch.from_numpy(static_supports).float()
+            elif isinstance(static_supports, torch.Tensor):
+                static_supports = static_supports.float()
+            else:
+                raise TypeError("static_supports must be np.ndarray or torch.Tensor")
+
+            self.register_buffer("static_supports", static_supports)
+        else:
+            self.static_supports = None
 
         self.encoder_s = HimEncoder(
             num_nodes=num_nodes,
@@ -524,6 +646,15 @@ class HimNet(nn.Module):
             max_len=out_steps + 1,
         )
 
+        self.graph_fusion = CrossAttentionGraphFusion(
+            num_nodes=num_nodes,
+            node_embedding_dim=node_embedding_dim,
+            attn_dim=node_embedding_dim,
+            fusion_hidden_dim=16,
+            dropout=transformer_dropout,
+        )
+
+        
         self.out_proj = nn.Linear(hidden_dim, output_dim)
 
         self.tod_embedding = nn.Embedding(288, tod_embedding_dim)
@@ -574,11 +705,19 @@ class HimNet(nn.Module):
                 dtype=x.dtype,
             )
 
-        # Static adaptive support from node embeddings: N, N
-        support_s = torch.softmax(
+        adaptive_support = torch.softmax(
             torch.relu(self.node_embedding @ self.node_embedding.T),
             dim=-1,
         )
+
+        if self.static_supports is not None:
+            support_s = self.graph_fusion(
+                node_embedding=self.node_embedding,
+                adaptive_support=adaptive_support,
+                static_support=self.static_supports,
+            )
+        else:
+            support_s = adaptive_support
 
         # Encoder outputs: B, T_in, N, hidden_dim
         h_s, _ = self.encoder_s(
