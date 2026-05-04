@@ -41,6 +41,7 @@ def main():
         bias_scale=1.0,
         attn_tau=1.0,
         film_hidden_dim=64,
+        iter_refine_steps=5,
     )
 
     BasicTSLauncher.launch_training(BasicTSForecastingConfig(
