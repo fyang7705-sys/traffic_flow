@@ -40,6 +40,7 @@ class HimNet(nn.Module):
             tf_decay_steps=int(config.tf_decay_steps),
             use_teacher_forcing=bool(config.use_teacher_forcing),
             use_time_embedding=bool(config.use_time_embedding),
+            use_graph_fusion=bool(config.use_graph_fusion),
             transformer_nhead=int(config.transformer_nhead),
             transformer_layers=int(config.transformer_layers),
             transformer_ff_dim=(None if config.transformer_ff_dim is None else int(config.transformer_ff_dim)),

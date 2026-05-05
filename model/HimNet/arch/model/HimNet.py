@@ -569,6 +569,7 @@ class HimNet(nn.Module):
         tf_decay_steps=4000,
         use_teacher_forcing=True,
         use_time_embedding=True,
+        use_graph_fusion=True,
         transformer_nhead=4,
         transformer_layers=1,
         transformer_ff_dim=None,
@@ -598,6 +599,7 @@ class HimNet(nn.Module):
         self.tf_decay_steps = tf_decay_steps
         self.use_teacher_forcing = use_teacher_forcing
         self.use_time_embedding = use_time_embedding
+        self.use_graph_fusion = use_graph_fusion
         self.static_supports = static_supports
 
         self.time_embedding_dim = tod_embedding_dim + dow_embedding_dim
@@ -709,7 +711,7 @@ class HimNet(nn.Module):
             dim=-1,
         )
 
-        if self.static_supports is not None:
+        if self.static_supports is not None and self.use_graph_fusion:
             support_s = self.graph_fusion(
                 node_embedding=self.node_embedding,
                 adaptive_support=adaptive_support,

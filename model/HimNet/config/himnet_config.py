@@ -45,7 +45,8 @@ class HimNetConfig(BasicTSModelConfig):
 
     # ----- static graph prior -----
     adj: Optional[List[List[float]]] = field(default=None)
-
+    use_graph_fusion: bool = field(default=True)
+    
     # ----- iTransformer global time embedding (ITransformerGlobalTimeEmbedding) -----
     in_steps: Optional[int] = field(default=None)
     time_d_model: int = field(default=64)
