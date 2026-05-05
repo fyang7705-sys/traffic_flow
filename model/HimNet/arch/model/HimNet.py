@@ -554,14 +554,14 @@ class HimNet(nn.Module):
     def __init__(
         self,
         num_nodes,
-        input_dim=3,
+        input_dim=1,
         output_dim=1,
         out_steps=12,
         in_steps=12,
         hidden_dim=64,
         num_layers=1,
         cheb_k=2,
-        ycov_dim=2,
+        # ycov_dim=2,
         tod_embedding_dim=8,
         dow_embedding_dim=8,
         node_embedding_dim=16,
@@ -592,7 +592,7 @@ class HimNet(nn.Module):
         self.in_steps = in_steps
         self.num_layers = num_layers
         self.cheb_k = cheb_k
-        self.ycov_dim = ycov_dim
+        # self.ycov_dim = ycov_dim
         self.node_embedding_dim = node_embedding_dim
         self.st_embedding_dim = st_embedding_dim
         self.tf_decay_steps = tf_decay_steps
@@ -634,7 +634,7 @@ class HimNet(nn.Module):
 
         self.decoder = HimDecoder(
             num_nodes=num_nodes,
-            input_dim=output_dim + ycov_dim,
+            input_dim=output_dim,
             output_dim=hidden_dim,
             cheb_k=cheb_k,
             num_layers=num_layers,
@@ -684,13 +684,10 @@ class HimNet(nn.Module):
             self.tf_decay_steps + np.exp(batches_seen / self.tf_decay_steps)
         )
 
-    def forward(self, x, y_cov, labels=None, batches_seen=None):
+    def forward(self, x, labels=None, batches_seen=None):
         """
         x:
             B, T_in, N, input_dim
-
-        y_cov:
-            B, out_steps, N, ycov_dim
 
         labels:
             optional, B, out_steps, N, output_dim
@@ -763,11 +760,7 @@ class HimNet(nn.Module):
         decoder_inputs = []
 
         for t in range(self.out_steps):
-            decoder_input_t = torch.cat(
-                [go, y_cov[:, t, ...]],
-                dim=-1,
-            )
-
+            decoder_input_t = go
             decoder_inputs.append(decoder_input_t)
 
             decoder_input_seq = torch.stack(

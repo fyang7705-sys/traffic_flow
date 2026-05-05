@@ -12,7 +12,7 @@ class HimNetConfig(BasicTSModelConfig):
     num_nodes: Optional[int] = field(default=None)
 
     # x feature dims
-    input_dim: int = field(default=3)
+    input_dim: int = field(default=1)
     output_dim: int = field(default=1)
 
     # ----- model (graph+temporal) -----
@@ -21,7 +21,7 @@ class HimNetConfig(BasicTSModelConfig):
     cheb_k: int = field(default=2)
 
     # decoder future cov dims
-    ycov_dim: int = field(default=2)
+    ycov_dim: int = field(default=0)
 
     # embeddings
     tod_embedding_dim: int = field(default=8)
