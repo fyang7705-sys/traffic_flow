@@ -467,6 +467,7 @@ class HimNet(nn.Module):
         transformer_ff_dim=None,
         transformer_dropout=0.1,
         static_supports=None,
+        long_pattern=None,
 
         # iTransformer time embedding
         time_d_model=64,
@@ -492,8 +493,9 @@ class HimNet(nn.Module):
         self.use_teacher_forcing = use_teacher_forcing
         self.use_time_embedding = use_time_embedding
         self.use_graph_fusion = use_graph_fusion
-        self.static_supports = static_supports
-
+        self.register_buffer("static_supports", static_supports)
+        self.register_buffer("long_pattern", long_pattern)
+        
         self.time_embedding_dim = tod_embedding_dim + dow_embedding_dim
 
         self.encoder_s = HimEncoder(
@@ -544,6 +546,7 @@ class HimNet(nn.Module):
         
         self.graph_fusion = CrossAttentionGraphFusion(
             num_nodes=num_nodes,
+            long_pattern_dim=(long_pattern.shape[1] if long_pattern is not None else 0),
             node_embedding_dim=node_embedding_dim,
             attn_dim=node_embedding_dim,
             fusion_hidden_dim=16,
@@ -606,6 +609,7 @@ class HimNet(nn.Module):
         if self.static_supports is not None and self.use_graph_fusion:
             support_s = self.graph_fusion(
                 node_embedding=self.node_embedding,
+                long_pattern=self.long_pattern,
                 adaptive_support=adaptive_support,
                 static_support=self.static_supports,
             )

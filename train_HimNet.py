@@ -11,12 +11,14 @@ from basicts.runners.callback import EarlyStopping, GradientClipping
 
 from dataset.graph_scaler import GraphScaler
 from dataset.hpibt_dataset import HybridPIBTDataset
-from model.HimNet import HimNet, HimNetConfig
-
+from model.HimNet import HimNet, HimNetConfig, LongPatternExtractor
 
 def main():
     data = np.load("data/den520d_lifelong/robot1000/train_data.npy")
+    local_ends = np.load("data/den520d_lifelong/robot1000/train_localends.npy")
     adj = np.load("data/den520d_adjacency.npy")
+
+    long_pattern = LongPatternExtractor.extract_long_pattern(np.concatenate([data[..., None], local_ends[..., None]], axis=-1))
     num_nodes = data.shape[-1]
     for input_len in [12, 24, 48, 96]:
         for output_len in [12, 24, 48, 96]:
@@ -28,6 +30,7 @@ def main():
                 num_nodes=num_nodes,
                 use_time_embedding=True,
                 adj=adj.tolist(),
+                long_pattern=long_pattern.tolist(),
             )
             BasicTSLauncher.launch_training(BasicTSForecastingConfig(
                 model=HimNet, 
@@ -38,7 +41,9 @@ def main():
                 dataset_type=HybridPIBTDataset, 
                 data_file_path="data/den520d_lifelong/robot1000",
                 use_timestamps=False, 
+                use_localends=True,
                 input_len=input_len, 
+                input_dim=2,
                 output_len=output_len, 
                 gpus="0",
                 callbacks=[EarlyStopping(), GradientClipping(1.0)], 

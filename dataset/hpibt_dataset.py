@@ -29,6 +29,7 @@ class HybridPIBTDataset(BasicTSDataset):
             output_len: int,
             mode: Union[BasicTSMode, str],
             use_timestamps: bool = False,
+            use_localends: bool = False,
             local: bool = True,
             data_file_path: Union[str, None] = None,
             memmap: bool = False) -> None:
@@ -51,6 +52,11 @@ class HybridPIBTDataset(BasicTSDataset):
                     os.path.join(data_file_path, f"{mode}_timestamps.npy"),
                     mmap_mode="r" if memmap else None,
                 )
+            if use_localends:
+                self.local_ends = np.load(
+                    os.path.join(data_file_path, f"{mode}_localends.npy"),
+                    mmap_mode="r" if memmap else None,
+                )
         except FileNotFoundError as e:
             raise FileNotFoundError(
                 f"Cannot load dataset from {data_file_path}, Please set a correct local path."
@@ -59,7 +65,7 @@ class HybridPIBTDataset(BasicTSDataset):
 
         self.memmap = memmap
         self.use_timestamps = use_timestamps
-
+        self.use_localends = use_localends
         # Determine mode: single-series (T,F) vs multi-series (S,T,F)
         if not isinstance(self._data, np.ndarray) or self._data.ndim not in (2, 3):
             raise ValueError(f"Expected data shape (T,F) or (S,T,F), got {getattr(self._data, 'shape', None)}")
@@ -103,6 +109,9 @@ class HybridPIBTDataset(BasicTSDataset):
                 future_timestamps = self.timestamps[index + self.input_len: index + self.input_len + self.output_len]
                 item["inputs_timestamps"] = history_timestamps.copy() if self.memmap else history_timestamps
                 item["targets_timestamps"] = future_timestamps.copy() if self.memmap else future_timestamps
+            if self.use_localends:
+                item["inputs_local_ends"] = self.local_ends[index: index + self.input_len].copy() if self.memmap else self.local_ends[index: index + self.input_len]
+                item["targets_local_ends"] = self.local_ends[index + self.input_len: index + self.input_len + self.output_len].copy() if self.memmap else self.local_ends[index + self.input_len: index + self.input_len + self.output_len]
             return item
 
         # data: (S,T,F)
@@ -124,6 +133,12 @@ class HybridPIBTDataset(BasicTSDataset):
             future_ts = ts_series[t0 + self.input_len: t0 + self.input_len + self.output_len]
             item["inputs_timestamps"] = history_ts.copy() if self.memmap else history_ts
             item["targets_timestamps"] = future_ts.copy() if self.memmap else future_ts
+        if self.use_localends:
+            le_series = self.local_ends[sid]
+            history_le = le_series[t0: t0 + self.input_len]
+            future_le = le_series[t0 + self.input_len: t0 + self.input_len + self.output_len]
+            item["inputs_local_ends"] = history_le.copy() if self.memmap else history_le
+            item["targets_local_ends"] = future_le.copy() if self.memmap else future_le
         # print("input shape:", item["inputs"].shape)
         # print("target shape:", item["targets"].shape)
         return item

@@ -16,7 +16,8 @@ class HimNet(nn.Module):
         static_supports = None
         if getattr(config, "adj", None) is not None:
             static_supports = torch.as_tensor(config.adj, dtype=torch.float32)
-
+        if getattr(config, "long_pattern", None) is not None:
+            long_pattern = torch.as_tensor(config.long_pattern, dtype=torch.float32)
         if getattr(config, "in_steps", None) is None:
             in_steps = int(config.input_len)
         else:
@@ -46,6 +47,7 @@ class HimNet(nn.Module):
             transformer_ff_dim=(None if config.transformer_ff_dim is None else int(config.transformer_ff_dim)),
             transformer_dropout=float(config.transformer_dropout),
             static_supports=static_supports,
+            long_pattern=long_pattern,
             time_d_model=int(config.time_d_model),
             time_nhead=int(config.time_nhead),
             time_layers=int(config.time_layers),
@@ -53,7 +55,7 @@ class HimNet(nn.Module):
             time_dropout=float(config.time_dropout),
         )
 
-    def forward(self, inputs: torch.Tensor, inputs_timestamps: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, inputs: torch.Tensor, inputs_timestamps: Optional[torch.Tensor] = None, inputs_local_ends: Optional[torch.Tensor] = None) -> torch.Tensor:
         if inputs.dim() == 3:
             x = inputs.unsqueeze(-1)
         else:
@@ -72,7 +74,12 @@ class HimNet(nn.Module):
             base = torch.arange(t, device=x.device).view(1, t, 1, 1).expand(b, -1, n, -1)
             tod = (base % self.time_of_day_size) / float(self.time_of_day_size)
             dow = ((base // self.time_of_day_size) % 7).float()
-        x_in = torch.cat([value], dim=-1)
+        if inputs_local_ends is not None:
+            if inputs_local_ends.dim() == 3:
+                inputs_local_ends = inputs_local_ends.unsqueeze(-1)
+            x_in = torch.cat([value, inputs_local_ends], dim=-1)
+        else:
+            x_in = torch.cat([value], dim=-1)
 
         y = self.model(x_in, labels=None, batches_seen=0)
         if y.dim() == 4 and y.shape[-1] == 1:

@@ -22,6 +22,7 @@ class CrossAttentionGraphFusion(nn.Module):
         node_embedding_dim,
         attn_dim=None,
         nhead: int = 4,
+        long_pattern_dim=2,
         fusion_hidden_dim=16,
         dropout=0.1,
         head_fusion: str = "mean",
@@ -40,6 +41,13 @@ class CrossAttentionGraphFusion(nn.Module):
         self.nhead = int(nhead)
         self.head_dim = self.attn_dim // self.nhead
         self.head_fusion = head_fusion
+
+        # 使用专门的 embedding 投影用于静态图语境（避免直接共用 node_embedding）
+        self.long_pattern_encoder = nn.Sequential(
+            nn.Linear(long_pattern_dim, node_embedding_dim),
+            nn.ReLU(),
+            nn.Linear(node_embedding_dim, node_embedding_dim)
+        )
 
         self.q_proj = nn.Linear(node_embedding_dim, self.attn_dim)
         self.k_proj = nn.Linear(node_embedding_dim, self.attn_dim)
@@ -61,7 +69,7 @@ class CrossAttentionGraphFusion(nn.Module):
         # N, (H*D) -> N, H, D -> H, N, D
         return x.view(x.shape[0], self.nhead, self.head_dim).permute(1, 0, 2).contiguous()
 
-    def forward(self, node_embedding, adaptive_support, static_support):
+    def forward(self, adaptive_support, static_support, node_embedding, long_pattern):
         """
         node_embedding:
             N, E
@@ -73,20 +81,16 @@ class CrossAttentionGraphFusion(nn.Module):
             N, N
         """
 
-        static_support = static_support.to(
-            device=adaptive_support.device,
-            dtype=adaptive_support.dtype,
-        )
 
         # 静态图先做行归一化，避免尺度和 adaptive_support 不一致
         static_support = self._row_normalize(static_support)
 
         # -------------------------------------------------------
-        # 1. 用静态图聚合 node_embedding，得到静态结构感知的节点表示
+        # 1. 用静态图聚合“专门的 embedding”，得到静态结构感知的节点表示
         # -------------------------------------------------------
-        # N, E
-        static_context = torch.matmul(static_support, node_embedding)
-
+        static_node_embedding = self.long_pattern_encoder(long_pattern)
+        static_context = torch.matmul(static_support, static_node_embedding)
+    
         # -------------------------------------------------------
         # 2. 多头交叉注意力：
         #    query 来自 node_embedding

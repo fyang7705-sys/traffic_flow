@@ -45,6 +45,7 @@ class HimNetConfig(BasicTSModelConfig):
 
     # ----- static graph prior -----
     adj: Optional[List[List[float]]] = field(default=None)
+    long_pattern: Optional[List[List[float]]] = field(default=None)
     use_graph_fusion: bool = field(default=True)
     
     # ----- iTransformer global time embedding (ITransformerGlobalTimeEmbedding) -----
@@ -54,3 +55,6 @@ class HimNetConfig(BasicTSModelConfig):
     time_layers: int = field(default=1)
     time_ff_dim: Optional[int] = field(default=None)
     time_dropout: float = field(default=0.1)
+    
+    eval_after_train: bool = field(default=True)
+    use_localends: bool = field(default=False)
