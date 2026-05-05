@@ -45,15 +45,15 @@ class GraphScaler:
             # print("mean shape", self.stats['mean'].shape, "std shape", self.stats['std'].shape)
         else:
             if self.norm_each_channel:
-                self.stats['mean'] = torch.mean(data, dim=-2, keepdim=True)
-                self.stats['std'] = torch.std(data, dim=-2, keepdim=True)
+                self.stats['mean'] = torch.mean(data, dim=(0, 1), keepdim=True)
+                self.stats['std'] = torch.std(data, dim=(0, 1), keepdim=True)
                 self.stats['std'][self.stats['std'] == 0] = 1.0  # prevent division by zero by setting std to 1 where it's 0
             else:
                 self.stats['mean'] = torch.mean(data)
                 self.stats['std'] = torch.std(data)
                 if self.stats['std'] == 0:
                     self.stats['std'] = 1.0  # prevent division by zero by setting std to 1 where it's 0
-
+        print("mean: ", self.stats['mean'].shape, "std: ", self.stats['std'].shape)
     def transform(self, input_data: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Apply Z-score normalization to the input data.
@@ -92,9 +92,12 @@ class GraphScaler:
         Returns:
             torch.Tensor: The data transformed back to its original scale.
         """
-
         mean = self.stats['mean'].to(input_data.device)
         std = self.stats['std'].to(input_data.device)
+        if input_data.ndim == 4 and mean.ndim == 3:
+            mean = mean.unsqueeze(-1)
+            std = std.unsqueeze(-1)
+
         denormed_data = input_data * std + mean
         if mask is not None:
             denormed_data = torch.where(mask, denormed_data, input_data)

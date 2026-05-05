@@ -99,7 +99,7 @@ def main():
     parser = argparse.ArgumentParser(description="可视化对比 result/*.json 的 overall 指标（仅雷达图）")
     parser.add_argument("--result_dir", type=str, default="result", help="result 目录（包含多个 *.json）")
     parser.add_argument("--out_dir", type=str, default="result_vis", help="输出图片/表格目录")
-    parser.add_argument("--metrics", type=str, default="MAE,MSE,RMSE,MAPE,WAPE", help="要绘制的指标，逗号分隔")
+    parser.add_argument("--metrics", type=str, default="mae,mse,rmse,mape,wmape", help="要绘制的指标，逗号分隔")
     args = parser.parse_args()
 
     result_dir = Path(args.result_dir)
