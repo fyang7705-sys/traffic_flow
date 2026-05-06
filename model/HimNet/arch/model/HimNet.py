@@ -1,4 +1,3 @@
-import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -87,56 +86,23 @@ class HimGCN(nn.Module):
         return x_gconv
 
 
-class TemporalPositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=1000):
-        super().__init__()
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2, dtype=torch.float32)
-            * (-math.log(10000.0) / d_model)
-        )
-
-        pe[:, 0::2] = torch.sin(position * div_term)
-
-        if d_model % 2 == 0:
-            pe[:, 1::2] = torch.cos(position * div_term)
-        else:
-            pe[:, 1::2] = torch.cos(position * div_term[:-1])
-
-        # 1, max_len, d_model
-        self.register_buffer("pe", pe.unsqueeze(0))
-
-    def forward(self, x):
-        """
-        x: B*N, T, hidden_dim
-        """
-        seq_len = x.size(1)
-        if seq_len > self.pe.size(1):
-            raise ValueError(
-                f"Sequence length {seq_len} exceeds max_len {self.pe.size(1)}."
-            )
-
-        return x + self.pe[:, :seq_len, :].to(dtype=x.dtype)
-
-
 class HimGCRU(nn.Module):
     """
-    Transformer replacement for the original HimGCRU.
+    Original HimNet GCRU: GCN + GRU-style recurrent unit.
 
-    Original HimGCRU:
-        x_t + state_{t-1} -> gate/update -> state_t
-
-    New version:
-        x_{0:T} -> HimGCN for each time step -> Transformer over time -> h_{0:T}
-
-    The input is now a full sequence:
+    This class keeps the sequence-level interface used by the modified code:
         x: B, T, N, input_dim
+        init_state: optional B, N, hidden_dim
 
-    For decoder usage, init_state can be passed as a context token:
-        init_state: B, N, hidden_dim
+    Internally, every time step follows the original HimNet implementation:
+
+        input_and_state = concat(x_t, state)
+        z, r = sigmoid(HimGCN(input_and_state)).chunk(2)
+        hc = tanh(HimGCN(concat(x_t, z * state)))
+        state = r * state + (1 - r) * hc
+
+    The Transformer arguments are kept only for compatibility with the
+    previous GCN + Transformer version. They are not used here.
     """
 
     def __init__(
@@ -147,55 +113,37 @@ class HimGCRU(nn.Module):
         cheb_k,
         embed_dim,
         meta_axis="S",
-        nhead=4,
-        num_transformer_layers=1,
-        dim_feedforward=None,
-        dropout=0.1,
-        max_len=1000,
     ):
         super().__init__()
 
-        if output_dim % nhead != 0:
-            raise ValueError(
-                f"output_dim={output_dim} must be divisible by nhead={nhead}"
-            )
-
         self.num_nodes = num_nodes
+        self.input_dim = input_dim
         self.hidden_dim = output_dim
 
-        self.gcn = HimGCN(
-            input_dim=input_dim,
+        self.gate = HimGCN(
+            input_dim=input_dim + output_dim,
+            output_dim=2 * output_dim,
+            cheb_k=cheb_k,
+            embed_dim=embed_dim,
+            meta_axis=meta_axis,
+        )
+
+        self.update = HimGCN(
+            input_dim=input_dim + output_dim,
             output_dim=output_dim,
             cheb_k=cheb_k,
             embed_dim=embed_dim,
             meta_axis=meta_axis,
         )
 
-        self.pos_encoder = TemporalPositionalEncoding(
-            d_model=output_dim,
-            max_len=max_len,
+    def init_hidden_state(self, batch_size, device=None, dtype=None):
+        return torch.zeros(
+            batch_size,
+            self.num_nodes,
+            self.hidden_dim,
+            device=device,
+            dtype=dtype,
         )
-
-        if dim_feedforward is None:
-            dim_feedforward = output_dim * 4
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=output_dim,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
-
-        self.temporal_encoder = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=num_transformer_layers,
-        )
-
-        self.norm = nn.LayerNorm(output_dim)
-
 
     def forward(self, x, support, embeddings, init_state=None):
         """
@@ -216,70 +164,72 @@ class HimGCRU(nn.Module):
             or B, N, hidden_dim
 
         return:
-            h:
+            outputs:
                 B, T, N, hidden_dim
 
-            last_state:
+            state:
                 B, N, hidden_dim
         """
         if x.dim() != 4:
             raise ValueError(
-                f"HimGCRU now expects x with shape (B, T, N, C), got {tuple(x.shape)}"
+                f"HimGCRU expects x with shape (B, T, N, C), got {tuple(x.shape)}"
             )
 
         B, T, N, _ = x.shape
 
-        spatial_outputs = []
-        for t in range(T):
-            # B, N, hidden_dim
-            h_t = self.gcn(
-                x[:, t, :, :],
-                support,
-                embeddings,
+        if N != self.num_nodes:
+            raise ValueError(
+                f"Expected num_nodes={self.num_nodes}, but got N={N}"
             )
-            spatial_outputs.append(h_t)
 
-        # B, T, N, hidden_dim
-        h = torch.stack(spatial_outputs, dim=1)
-
-        # B, T, N, H -> B, N, T, H -> B*N, T, H
-        h = h.permute(0, 2, 1, 3).contiguous()
-        h = h.reshape(B * N, T, self.hidden_dim)
-
-        has_context_token = init_state is not None
-        if has_context_token:
+        if init_state is None:
+            state = self.init_hidden_state(
+                batch_size=B,
+                device=x.device,
+                dtype=x.dtype,
+            )
+        else:
             if init_state.shape != (B, N, self.hidden_dim):
                 raise ValueError(
                     "init_state must have shape "
                     f"(B, N, hidden_dim)=({B}, {N}, {self.hidden_dim}), "
                     f"got {tuple(init_state.shape)}"
                 )
+            state = init_state
 
-            # B, N, H -> B*N, 1, H
-            context = init_state.reshape(B * N, 1, self.hidden_dim)
-            h = torch.cat([context, h], dim=1)
+        outputs = []
 
-        h = self.pos_encoder(h)
+        for t in range(T):
+            x_t = x[:, t, :, :]  # B, N, input_dim
 
+            input_and_state = torch.cat((x_t, state), dim=-1)
 
-        # B*N, T(+1), H
-        h = self.temporal_encoder(
-            h,
-            mask=None,
-        )
+            z_r = torch.sigmoid(
+                self.gate(
+                    input_and_state,
+                    support,
+                    embeddings,
+                )
+            )
 
-        h = self.norm(h)
+            z, r = torch.split(z_r, self.hidden_dim, dim=-1)
 
-        if has_context_token:
-            h = h[:, 1:, :]
+            candidate_input = torch.cat((x_t, z * state), dim=-1)
 
-        # B*N, T, H -> B, N, T, H -> B, T, N, H
-        h = h.reshape(B, N, T, self.hidden_dim)
-        h = h.permute(0, 2, 1, 3).contiguous()
+            hc = torch.tanh(
+                self.update(
+                    candidate_input,
+                    support,
+                    embeddings,
+                )
+            )
 
-        last_state = h[:, -1, :, :]
+            state = r * state + (1.0 - r) * hc
+            outputs.append(state)
 
-        return h, last_state
+        outputs = torch.stack(outputs, dim=1)
+
+        return outputs, state
 
 
 class HimEncoder(nn.Module):
@@ -292,11 +242,6 @@ class HimEncoder(nn.Module):
         num_layers,
         embed_dim,
         meta_axis="S",
-        nhead=4,
-        num_transformer_layers=1,
-        dim_feedforward=None,
-        dropout=0.1,
-        max_len=1000,
     ):
         super().__init__()
 
@@ -314,11 +259,6 @@ class HimEncoder(nn.Module):
                     cheb_k=cheb_k,
                     embed_dim=embed_dim,
                     meta_axis=meta_axis,
-                    nhead=nhead,
-                    num_transformer_layers=num_transformer_layers,
-                    dim_feedforward=dim_feedforward,
-                    dropout=dropout,
-                    max_len=max_len,
                 )
                 for i in range(num_layers)
             ]
@@ -361,11 +301,6 @@ class HimDecoder(nn.Module):
         num_layers,
         embed_dim,
         meta_axis="ST",
-        nhead=4,
-        num_transformer_layers=1,
-        dim_feedforward=None,
-        dropout=0.1,
-        max_len=1000,
     ):
         super().__init__()
 
@@ -383,11 +318,6 @@ class HimDecoder(nn.Module):
                     cheb_k=cheb_k,
                     embed_dim=embed_dim,
                     meta_axis=meta_axis,
-                    nhead=nhead,
-                    num_transformer_layers=num_transformer_layers,
-                    dim_feedforward=dim_feedforward,
-                    dropout=dropout,
-                    max_len=max_len,
                 )
                 for i in range(num_layers)
             ]
@@ -453,7 +383,6 @@ class HimNet(nn.Module):
         hidden_dim=64,
         num_layers=1,
         cheb_k=2,
-        # ycov_dim=2,
         tod_embedding_dim=8,
         dow_embedding_dim=8,
         node_embedding_dim=16,
@@ -462,12 +391,7 @@ class HimNet(nn.Module):
         use_teacher_forcing=True,
         use_time_embedding=True,
         use_graph_fusion=True,
-        transformer_nhead=4,
-        transformer_layers=1,
-        transformer_ff_dim=None,
-        transformer_dropout=0.1,
         static_supports=None,
-
         # iTransformer time embedding
         time_d_model=64,
         time_nhead=4,
@@ -485,7 +409,6 @@ class HimNet(nn.Module):
         self.in_steps = in_steps
         self.num_layers = num_layers
         self.cheb_k = cheb_k
-        # self.ycov_dim = ycov_dim
         self.node_embedding_dim = node_embedding_dim
         self.st_embedding_dim = st_embedding_dim
         self.tf_decay_steps = tf_decay_steps
@@ -504,11 +427,6 @@ class HimNet(nn.Module):
             num_layers=num_layers,
             embed_dim=node_embedding_dim,
             meta_axis="S",
-            nhead=transformer_nhead,
-            num_transformer_layers=transformer_layers,
-            dim_feedforward=transformer_ff_dim,
-            dropout=transformer_dropout,
-            max_len=1000,
         )
 
         self.encoder_t = HimEncoder(
@@ -519,11 +437,6 @@ class HimNet(nn.Module):
             num_layers=num_layers,
             embed_dim=self.time_embedding_dim,
             meta_axis="T",
-            nhead=transformer_nhead,
-            num_transformer_layers=transformer_layers,
-            dim_feedforward=transformer_ff_dim,
-            dropout=transformer_dropout,
-            max_len=1000,
         )
 
         self.decoder = HimDecoder(
@@ -534,22 +447,16 @@ class HimNet(nn.Module):
             num_layers=num_layers,
             embed_dim=st_embedding_dim,
             meta_axis="ST",
-            nhead=transformer_nhead,
-            num_transformer_layers=transformer_layers,
-            dim_feedforward=transformer_ff_dim,
-            dropout=transformer_dropout,
-            max_len=out_steps + 1,
         )
 
-        
         self.graph_fusion = CrossAttentionGraphFusion(
             num_nodes=num_nodes,
             node_embedding_dim=node_embedding_dim,
             attn_dim=node_embedding_dim,
             fusion_hidden_dim=16,
-            dropout=transformer_dropout,
+            dropout=time_dropout,
         )
-        
+
         self.out_proj = nn.Linear(hidden_dim, output_dim)
 
         self.time_pattern_embedding = ITransformerGlobalTimeEmbedding(
@@ -651,19 +558,12 @@ class HimNet(nn.Module):
         )
 
         out = []
-        decoder_inputs = []
 
         for t in range(self.out_steps):
-            decoder_input_t = go
-            decoder_inputs.append(decoder_input_t)
-
-            decoder_input_seq = torch.stack(
-                decoder_inputs,
-                dim=1,
-            )
-
+            # Original GCRU decoder only needs the current input and hidden states.
+            # Do not stack historical prefixes here; the history is stored in ht_list.
             h_de, ht_list = self.decoder(
-                decoder_input_seq,
+                go,
                 ht_list,
                 support_st,
                 st_embedding,
@@ -692,10 +592,9 @@ if __name__ == "__main__":
         from torchinfo import summary
 
         model = HimNet(num_nodes=207).cpu()
-        summary(model, [[64, 12, 207, 3], [64, 12, 207, 2]], device="cpu")
+        summary(model, [[64, 12, 207, 3]], device="cpu")
     except ImportError:
         model = HimNet(num_nodes=207).cpu()
         x = torch.randn(2, 12, 207, 3)
-        y_cov = torch.randn(2, 12, 207, 2)
-        y = model(x, y_cov)
+        y = model(x)
         print(y.shape)
