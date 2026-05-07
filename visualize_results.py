@@ -95,11 +95,62 @@ def plot_radar(df, out_dir: Path, metrics: List[str], normalize: str = "minmax")
     print(f"[保存] {out_path}")
 
 
+def plot_bars_mae(df, out_dir: Path):
+    """仅绘制 MAE 的柱状图（做 min-max 归一化后越大越好）。"""
+    import matplotlib.pyplot as plt
+
+    if "mae" not in df.columns:
+        print("[跳过] 表格中没有 mae 列，无法绘制 MAE 柱状图")
+        return
+
+    values = df[["mae"]].copy()
+    mae = values["mae"]
+
+    # min-max：将“越小越好”的 MAE 映射成“越大越好”的得分 [0,1]
+    vmin = float(mae.min())
+    vmax = float(mae.max())
+    denom = (vmax - vmin) if (vmax - vmin) != 0 else 1.0
+    score = (vmax - mae) / denom  # best->1, worst->0
+
+    plot_df = (
+        values.assign(mae_score=score)
+        .sort_values(by="mae_score", ascending=False)
+    )
+
+    plt.figure(figsize=(10, 4))
+    bars = plt.bar(plot_df.index.tolist(), plot_df["mae_score"].to_list(), width=0.65)
+    plt.xticks(rotation=30, ha="right")
+    plt.ylabel("MAE normalized score (higher is better)")
+    plt.ylim(0, 1)
+    plt.title("MAE comparison (min-max normalized)")
+
+    # 在柱上标注原始 MAE，便于回看绝对误差
+    for rect, raw_mae in zip(bars, plot_df["mae"].to_list()):
+        h = rect.get_height()
+        plt.text(
+            rect.get_x() + rect.get_width() / 2,
+            min(1.0, h + 0.02),
+            f"{raw_mae:.4g}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            rotation=90,
+        )
+
+    plt.tight_layout()
+
+    out_path = out_dir / "compare_mae_bar_minmax.png"
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    print(f"[保存] {out_path}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="可视化对比 result/*.json 的 overall 指标（仅雷达图）")
+    parser = argparse.ArgumentParser(description="可视化对比 result/*.json 的 overall 指标（MAE 柱状图 + 可选雷达图）")
     parser.add_argument("--result_dir", type=str, default="result", help="result 目录（包含多个 *.json）")
     parser.add_argument("--out_dir", type=str, default="result_vis", help="输出图片/表格目录")
-    parser.add_argument("--metrics", type=str, default="mae,mse,rmse,mape,wmape", help="要绘制的指标，逗号分隔")
+    parser.add_argument("--metrics", type=str, default="mae,mse,rmse,mape,wmape", help="雷达图使用的指标，逗号分隔")
+    parser.add_argument("--no_radar", action="store_true", help="不输出雷达图")
     args = parser.parse_args()
 
     result_dir = Path(args.result_dir)
@@ -125,7 +176,12 @@ def main():
     df.to_csv(csv_path, float_format="%.6f")
     print(f"[保存] {csv_path}")
 
-    plot_radar(df, out_dir, metric_list)
+    # MAE 柱状图（默认输出）
+    plot_bars_mae(df, out_dir)
+
+    # 可选雷达图
+    if not args.no_radar:
+        plot_radar(df, out_dir, metric_list)
 
 
 if __name__ == "__main__":

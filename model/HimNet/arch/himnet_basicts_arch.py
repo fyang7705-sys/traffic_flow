@@ -17,6 +17,8 @@ class HimNet(nn.Module):
         if getattr(config, "adj", None) is not None:
             static_supports = torch.as_tensor(config.adj, dtype=torch.float32)
 
+        extra_static_supports = getattr(config, "extra_static_supports", None)
+
         if getattr(config, "in_steps", None) is None:
             in_steps = int(config.input_len)
         else:
@@ -39,11 +41,11 @@ class HimNet(nn.Module):
             use_time_embedding=bool(config.use_time_embedding),
             use_graph_fusion=bool(config.use_graph_fusion),
             static_supports=static_supports,
+            extra_static_supports=extra_static_supports,
             time_d_model=int(config.time_d_model),
-            time_nhead=int(config.time_nhead),
-            time_layers=int(config.time_layers),
-            time_ff_dim=(None if config.time_ff_dim is None else int(config.time_ff_dim)),
             time_dropout=float(config.time_dropout),
+            node_base_dim=(None if config.node_base_dim is None else int(config.node_base_dim)),
+            decouple_node_embedding=bool(config.decouple_node_embedding),
         )
 
     def forward(self, inputs: torch.Tensor, inputs_timestamps: Optional[torch.Tensor] = None) -> torch.Tensor:

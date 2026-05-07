@@ -1,4 +1,5 @@
 import os
+
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 
 import numpy as np
@@ -27,6 +28,7 @@ def main():
                 output_len=output_len, 
                 num_nodes=num_nodes,
                 use_time_embedding=True,
+                use_graph_fusion=True,
                 adj=adj.tolist(),
             )
             BasicTSLauncher.launch_training(BasicTSForecastingConfig(
