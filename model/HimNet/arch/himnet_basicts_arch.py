@@ -36,9 +36,6 @@ class HimNet(nn.Module):
             tod_embedding_dim=int(config.tod_embedding_dim),
             dow_embedding_dim=int(config.dow_embedding_dim),
             node_embedding_dim=int(config.node_embedding_dim),
-            st_embedding_dim=int(config.st_embedding_dim),
-            tf_decay_steps=int(config.tf_decay_steps),
-            use_teacher_forcing=bool(config.use_teacher_forcing),
             use_time_embedding=bool(config.use_time_embedding),
             use_graph_fusion=bool(config.use_graph_fusion),
             static_supports=static_supports,
@@ -70,7 +67,7 @@ class HimNet(nn.Module):
             dow = ((base // self.time_of_day_size) % 7).float()
         x_in = torch.cat([value], dim=-1)
 
-        y = self.model(x_in, labels=None, batches_seen=0)
+        y = self.model(x_in)
         if y.dim() == 4 and y.shape[-1] == 1:
             y = y.squeeze(-1)
         return y

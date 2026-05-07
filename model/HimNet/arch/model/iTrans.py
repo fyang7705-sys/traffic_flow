@@ -1,20 +1,26 @@
 import torch
 from torch import nn
 
+
 class ITransformerGlobalTimeEmbedding(nn.Module):
     """
-    iTransformer-style global time embedding.
+    iTransformer-style time embedding (node-level).
 
     输入:
         x: B, T, N, C
         node_embedding: N, node_embedding_dim
 
     处理:
-        1. 节点 N 作为 token
-        2. 每个节点 token 的特征是 T * C
-        3. 使用共享的 node_embedding 作为节点身份编码
-        4. Transformer 在节点 token 间建模全局相关性
-        5. 池化得到 B, output_dim
+        1. 节点 N 作为 token, 每个 token 的特征是 T*C
+        2. 用共享的 node_embedding 作为节点身份编码
+        3. Transformer 在节点 token 间建模全局相关性
+        4. 输出节点级时间嵌入 B, N, output_dim
+
+    备注:
+        旧版本输出全局嵌入 B, output_dim (对 N 维 mean)。
+        当前版本输出节点级嵌入,让下游 encoder 可以用 ST 模式做
+        节点个性化的时间响应建模。如需全局向量,直接对返回值在
+        N 维做 mean 即可。
     """
 
     def __init__(
@@ -90,7 +96,7 @@ class ITransformerGlobalTimeEmbedding(nn.Module):
 
         return:
             time_embedding:
-                B, output_dim
+                B, N, output_dim   (节点级时间嵌入)
         """
         B, T, N, C = x.shape
 
@@ -122,25 +128,20 @@ class ITransformerGlobalTimeEmbedding(nn.Module):
         if self.use_shared_node_embedding:
             if node_embedding is None:
                 raise ValueError(
-                    "node_embedding must be provided when use_shared_node_embedding=True."
+                    "node_embedding must be provided when "
+                    "use_shared_node_embedding=True."
                 )
 
-            # N, node_embedding_dim -> N, d_model
-            node_identity = self.node_embedding_proj(node_embedding)
-
-            # N, d_model -> 1, N, d_model
-            node_identity = node_identity.unsqueeze(0)
-
+            # N, node_embedding_dim -> N, d_model -> 1, N, d_model
+            node_identity = self.node_embedding_proj(node_embedding).unsqueeze(0)
             node_tokens = node_tokens + node_identity
 
         # B, N, d_model
         node_tokens = self.encoder(node_tokens)
         node_tokens = self.norm(node_tokens)
 
-        # B, d_model
-        global_pattern = node_tokens.mean(dim=1)
-
-        # B, output_dim
-        time_embedding = self.out_proj(global_pattern)
+        # B, N, output_dim  (节点级,不再做全局 mean)
+        time_embedding = self.out_proj(node_tokens)
 
         return time_embedding
+
