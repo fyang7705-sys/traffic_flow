@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 
-class SimpleGraphFusion(nn.Module):
+class GraphFusion(nn.Module):
     """
     最简图融合: 多个候选图的可学习软混合。
 
@@ -102,7 +102,3 @@ class MultiSourceGraphFusion(nn.Module):
 
     def get_weights(self):
         return torch.softmax(self.fusion_logits, dim=0).detach().cpu().tolist()
-
-
-# 兼容旧名字 (现在指向简化版)
-CrossAttentionGraphFusion = SimpleGraphFusion

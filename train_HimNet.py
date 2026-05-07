@@ -17,7 +17,7 @@ from model.HimNet import HimNet, HimNetConfig
 
 def main():
     data = np.load("data/den520d_lifelong/robot1000/train_data.npy")
-    adj = np.load("data/den520d_adjacency.npy")
+    adj = np.load("data/den520d_adj_cost.npy")
     num_nodes = data.shape[-1]
     for input_len in [12, 24, 48, 96]:
         for output_len in [12, 24, 48, 96]:

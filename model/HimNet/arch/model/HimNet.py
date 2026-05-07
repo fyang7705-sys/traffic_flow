@@ -2,8 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .iTrans import SimpleTimeEmbedding
-from .GraphFusion import SimpleGraphFusion
+from .iTrans import TimeEmbedding
+from .GraphFusion import GraphFusion
 
 
 # ----------------------------------------------------------------------
@@ -244,7 +244,7 @@ class HimNet(nn.Module):
             cheb_k=cheb_k,
             num_layers=num_layers,
             embed_dim=self.time_embedding_dim,
-            meta_axis="ST",
+            meta_axis="T",
         )
 
         # 双流门控融合
@@ -253,7 +253,7 @@ class HimNet(nn.Module):
         # ------------------------------------------------------------------
         # MLP-Mixer 风格时间模式
         # ------------------------------------------------------------------
-        self.time_pattern_embedding = SimpleTimeEmbedding(
+        self.time_pattern_embedding = TimeEmbedding(
             in_steps=in_steps,
             num_nodes=num_nodes,
             input_dim=input_dim,
@@ -261,13 +261,12 @@ class HimNet(nn.Module):
             node_embedding_dim=node_embedding_dim,
             d_model=time_d_model,
             dropout=time_dropout,
-            use_shared_node_embedding=True,
         )
 
         # ------------------------------------------------------------------
         # 简化图融合 (2 个标量软混合)
         # ------------------------------------------------------------------
-        self.graph_fusion = SimpleGraphFusion(
+        self.graph_fusion = GraphFusion(
             num_nodes=num_nodes,
             static_bias_init=1.0,
         )
@@ -347,10 +346,10 @@ class HimNet(nn.Module):
 
         # 1. 时间嵌入
         if self.use_time_embedding:
-            time_embedding_node = self.time_pattern_embedding(x, node_embedding=E_id)
+            time_embedding = self.time_pattern_embedding(x, node_embedding=E_id)
         else:
-            time_embedding_node = torch.zeros(
-                B, N, self.time_embedding_dim, device=x.device, dtype=x.dtype,
+            time_embedding = torch.zeros(
+                B, self.time_embedding_dim, device=x.device, dtype=x.dtype,
             )
 
         # 2. 自适应图 + 静态图融合
@@ -370,7 +369,7 @@ class HimNet(nn.Module):
 
         # 3. 双流编码
         h_s_seq, _ = self.encoder_s(x, support_s, E_s)
-        h_t_seq, _ = self.encoder_t(x, support_s, time_embedding_node)
+        h_t_seq, _ = self.encoder_t(x, support_s, time_embedding)
 
         # 4. 门控融合
         gate = torch.sigmoid(
