@@ -3,29 +3,44 @@ from torch import nn
 
 
 class GraphFusion(nn.Module):
-    """
-    最简图融合: 多个候选图的可学习软混合。
+    """门控图融合：自适应图与静态图按节点门控融合。
 
-    fused = softmax(theta) @ [adaptive, static]
+    旧版是全局两个标量权重（softmax(theta)）。
+    新版用 node_embedding 生成每个节点的 gate：
+        gate_i = sigmoid(MLP(e_i)) in (0,1)
+        fused[i, :] = gate_i * adaptive[i, :] + (1-gate_i) * static[i, :]
+
+    这样不同节点可以学习不同的融合偏好。
     """
 
     def __init__(
         self,
         num_nodes,
-        node_embedding_dim=None,    # 保留兼容, 不使用
-        attn_dim=None,              # 保留兼容, 不使用
-        fusion_hidden_dim=None,     # 保留兼容, 不使用
-        dropout=None,               # 保留兼容, 不使用
+        node_embedding_dim=None,
+        fusion_hidden_dim: int = 32,
+        dropout: float = 0.0,
         static_bias_init: float = 1.0,
     ):
         super().__init__()
         self.num_nodes = num_nodes
 
-        # 2 个通道: [adaptive, static]
-        # 初始 logit: adaptive=0, static=static_bias_init (正值, 训练初期 static 占优)
-        prior = torch.zeros(2)
-        prior[1] = float(static_bias_init)
-        self.fusion_logits = nn.Parameter(prior)
+        if node_embedding_dim is None:
+            # 兼容旧调用：如果没传维度，就退化为“全局门控”
+            self.gate_mlp = None
+        else:
+            self.gate_mlp = nn.Sequential(
+                nn.Linear(int(node_embedding_dim), int(fusion_hidden_dim)),
+                nn.GELU(),
+                nn.Dropout(float(dropout)),
+                nn.Linear(int(fusion_hidden_dim), 1),
+            )
+
+        # 当 gate_mlp 为 None 或 node_embedding 不可用时，使用一个全局可学习 gate
+        # 初始化让 static 更占优：gate 越小 static 权重越大
+        init_gate = 1.0 / (1.0 + torch.exp(torch.tensor(float(static_bias_init))))
+        # 反推 logit，使得 sigmoid(logit)=init_gate
+        init_logit = torch.log(init_gate / (1.0 - init_gate))
+        self.global_gate_logit = nn.Parameter(init_logit.clone().detach())
 
     def _row_normalize(self, adj, eps=1e-8):
         adj = torch.relu(adj)
@@ -33,10 +48,10 @@ class GraphFusion(nn.Module):
 
     def forward(self, node_embedding, adaptive_support, static_support):
         """
-        node_embedding: N, E  (保留接口兼容, 简化版不使用)
-        adaptive_support: N, N
-        static_support: N, N
-        return: N, N
+        node_embedding: (N, E)
+        adaptive_support: (N, N)
+        static_support: (N, N)
+        return: (N, N)
         """
         static_support = static_support.to(
             device=adaptive_support.device,
@@ -44,61 +59,27 @@ class GraphFusion(nn.Module):
         )
         static_support = self._row_normalize(static_support)
 
-        # softmax 得到混合权重
-        w = torch.softmax(self.fusion_logits, dim=0)   # 2,
+        adaptive_support = self._row_normalize(adaptive_support)
 
-        fused = w[0] * adaptive_support + w[1] * static_support
+        if self.gate_mlp is not None and node_embedding is not None:
+            gate = torch.sigmoid(self.gate_mlp(node_embedding)).to(
+                device=adaptive_support.device,
+                dtype=adaptive_support.dtype,
+            )  # (N, 1)
+        else:
+            gate = torch.sigmoid(self.global_gate_logit).to(
+                device=adaptive_support.device,
+                dtype=adaptive_support.dtype,
+            )
+            gate = gate.view(1, 1).expand(adaptive_support.shape[0], 1)  # (N, 1)
+
+        fused = gate * adaptive_support + (1.0 - gate) * static_support
         fused = self._row_normalize(fused)
         return fused
 
     def get_weights(self):
-        """诊断接口: 返回当前的混合权重"""
-        return torch.softmax(self.fusion_logits, dim=0).detach().cpu().tolist()
+        """诊断接口：返回全局 gate（以及如可用则返回每节点 gate 的占位说明）。"""
+        return {
+            "global_gate": float(torch.sigmoid(self.global_gate_logit).detach().cpu().item()),
+        }
 
-
-class MultiSourceGraphFusion(nn.Module):
-    """
-    支持任意多个 static prior 的简化融合。
-
-    输入: adaptive_support + 一组 static priors (在 HimNet 中混合后送入)
-    """
-
-    def __init__(
-        self,
-        num_nodes,
-        num_static_priors: int = 1,
-        static_bias_init: float = 1.0,
-        **kwargs,
-    ):
-        super().__init__()
-        self.num_nodes = num_nodes
-        self.num_channels = 1 + num_static_priors
-
-        prior = torch.zeros(self.num_channels)
-        # 给所有 static 通道一个小的正先验
-        prior[1:] = static_bias_init / max(num_static_priors, 1)
-        self.fusion_logits = nn.Parameter(prior)
-
-    def _row_normalize(self, adj, eps=1e-8):
-        adj = torch.relu(adj)
-        return adj / (adj.sum(dim=-1, keepdim=True) + eps)
-
-    def forward(self, adaptive_support, static_supports):
-        """
-        adaptive_support: N, N
-        static_supports: list of N, N (长度 = num_static_priors)
-        return: N, N
-        """
-        all_supports = [adaptive_support] + [
-            self._row_normalize(s.to(adaptive_support.device, adaptive_support.dtype))
-            for s in static_supports
-        ]
-        # K, N, N
-        stacked = torch.stack(all_supports, dim=0)
-
-        w = torch.softmax(self.fusion_logits, dim=0)   # K,
-        fused = (w[:, None, None] * stacked).sum(dim=0)
-        return self._row_normalize(fused)
-
-    def get_weights(self):
-        return torch.softmax(self.fusion_logits, dim=0).detach().cpu().tolist()
